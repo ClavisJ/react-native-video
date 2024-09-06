@@ -28,6 +28,7 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
 
     /** For sending videoProgress events */
     private var _controls = false
+    private var controlsView: ControlsView?
 
     /* Keep track of any modifiers, need to be applied after each play */
     var _audioOutput: String = "speaker"
@@ -102,6 +103,7 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
 
     private var _pip: RCTPictureInPicture?
     private var _isPictureInPictureActive = false
+    private var _originalPauseState = false // 手势操作之前的原始pause状态
 
     // Events
     @objc var onVideoLoadStart: RCTDirectEventBlock?
@@ -1169,7 +1171,6 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
 
     func usePlayerViewController() {
         guard let _player else { return }
-
         if _playerViewController == nil {
             _playerViewController = createPlayerViewController(player: _player)
         }
@@ -1197,16 +1198,25 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
 
     func createPlayerViewController(player: AVPlayer) -> RCTVideoPlayerViewController {
         let viewController = RCTVideoPlayerViewController()
-        viewController.showsPlaybackControls = self._controls
+        viewController.showsPlaybackControls = false
         #if !os(tvOS)
             viewController.updatesNowPlayingInfoCenter = false
         #endif
+        if #available(iOS 16.0, *) {
+            viewController.allowsVideoFrameAnalysis = false
+        }
         viewController.rctDelegate = self
         viewController.preferredOrientation = _fullscreenOrientation
 
         viewController.view.frame = self.bounds
         viewController.player = player
 
+        controlsView = ControlsView(frame: CGRect(x: 0, y: 0, width: self.bounds.width, height: self.bounds.width))
+        controlsView?.delegate = self
+        controlsView?._player = player
+        controlsView?.totalDuration = player.currentItem?.duration.seconds ?? 0
+        viewController.view.addSubview(controlsView!)
+        
         // Set the initial playback speed in controls to match playback rate
         if #available(iOS 16.0, tvOS 16.0, *) {
             if let initialSpeed = viewController.speeds.first(where: { $0.rate == _rate }) {
@@ -2075,3 +2085,37 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
         }
     }
 #endif
+
+extension RCTVideo: ControlsViewDelegate {
+    
+    func beginGesture() {
+        _originalPauseState = _paused
+    }
+    
+    func pausePlayback() {
+        if let palyer = _player {
+            palyer.pause()
+        }
+    }
+    
+    func resumePlayback() {
+        if let palyer = _player, !_originalPauseState {
+            palyer.play()
+        }
+    }
+    
+    func seekToTime(_ percentage: CGFloat, withRate rate: CGFloat) {
+        guard let player = _player else {
+            return
+        }
+        
+        let time = CMTime(seconds: percentage, preferredTimescale: 1)
+        DispatchQueue.main.async {
+            player.seek(to: time)
+            self.onVideoSeek?(["currentTime": NSNumber(value: Float(CMTimeGetSeconds(player.currentTime()))),
+                               "seekTime": time,
+                               "target": self.reactTag])
+        }
+        
+    }
+}

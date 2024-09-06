@@ -10,9 +10,9 @@ import static androidx.media3.common.C.TIME_END_OF_SOURCE;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.AlertDialog;
 import android.app.PictureInPictureParams;
 import android.app.RemoteAction;
-import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -29,9 +29,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.accessibility.CaptioningManager;
 import android.widget.FrameLayout;
-import android.widget.ImageButton;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
@@ -60,6 +57,7 @@ import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.analytics.PlayerId;
 import androidx.media3.exoplayer.dash.DashMediaSource;
 import androidx.media3.exoplayer.dash.DashUtil;
 import androidx.media3.exoplayer.dash.DefaultDashChunkSource;
@@ -67,13 +65,10 @@ import androidx.media3.exoplayer.dash.manifest.AdaptationSet;
 import androidx.media3.exoplayer.dash.manifest.DashManifest;
 import androidx.media3.exoplayer.dash.manifest.Period;
 import androidx.media3.exoplayer.dash.manifest.Representation;
-import androidx.media3.exoplayer.drm.DefaultDrmSessionManager;
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManagerProvider;
 import androidx.media3.exoplayer.drm.DrmSessionEventListener;
 import androidx.media3.exoplayer.drm.DrmSessionManager;
 import androidx.media3.exoplayer.drm.DrmSessionManagerProvider;
-import androidx.media3.exoplayer.drm.FrameworkMediaDrm;
-import androidx.media3.exoplayer.drm.HttpMediaDrmCallback;
 import androidx.media3.exoplayer.drm.UnsupportedDrmException;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
 import androidx.media3.exoplayer.ima.ImaAdsLoader;
@@ -87,7 +82,6 @@ import androidx.media3.exoplayer.smoothstreaming.SsMediaSource;
 import androidx.media3.exoplayer.source.ClippingMediaSource;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.source.MediaSource;
-import androidx.media3.exoplayer.source.MergingMediaSource;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 import androidx.media3.exoplayer.source.TrackGroupArray;
 import androidx.media3.exoplayer.source.ads.AdsMediaSource;
@@ -564,21 +558,27 @@ public class ReactExoplayerView extends FrameLayout implements
     private class RNVLoadControl extends DefaultLoadControl {
         private final int availableHeapInBytes;
         private final Runtime runtime;
+        private  PlayerId mPlayerId;
         public RNVLoadControl(DefaultAllocator allocator, BufferConfig config) {
             super(allocator,
                     config.getMinBufferMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
                             ? config.getMinBufferMs()
                             : DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
+                    DefaultLoadControl.DEFAULT_MIN_BUFFER_FOR_LOCAL_PLAYBACK_MS,
                     config.getMaxBufferMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
                             ? config.getMaxBufferMs()
                             : DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
+                    DefaultLoadControl.DEFAULT_MAX_BUFFER_FOR_LOCAL_PLAYBACK_MS,
                     config.getBufferForPlaybackMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
                             ? config.getBufferForPlaybackMs()
                             : DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS ,
+                    DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_FOR_LOCAL_PLAYBACK_MS ,
                     config.getBufferForPlaybackAfterRebufferMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
                             ? config.getBufferForPlaybackAfterRebufferMs()
                             : DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+                    DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_FOR_LOCAL_PLAYBACK_MS,
                     -1,
+                    true,
                     true,
                     config.getBackBufferDurationMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
                             ? config.getBackBufferDurationMs()
@@ -593,13 +593,20 @@ public class ReactExoplayerView extends FrameLayout implements
         }
 
         @Override
+        public void onPrepared(PlayerId playerId) {
+            super.onPrepared(playerId);
+            mPlayerId = playerId;
+        }
+
+        @Override
         public boolean shouldContinueLoading(long playbackPositionUs, long bufferedDurationUs, float playbackSpeed) {
             if (bufferingStrategy == BufferingStrategy.BufferingStrategyEnum.DisableBuffering) {
                 return false;
             } else if (bufferingStrategy == BufferingStrategy.BufferingStrategyEnum.DependingOnMemory) {
                 // The goal of this algorithm is to pause video loading (increasing the buffer)
                 // when available memory on device become low.
-                int loadedBytes = getAllocator().getTotalBytesAllocated();
+
+                int loadedBytes = getAllocator(mPlayerId).getTotalBytesAllocated();
                 boolean isHeapReached = availableHeapInBytes > 0 && loadedBytes >= availableHeapInBytes;
                 if (isHeapReached) {
                     return false;
